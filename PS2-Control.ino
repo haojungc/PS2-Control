@@ -45,6 +45,17 @@ bool mode = FAST;
 int fullspeed = 128;
 int halfspeed = 64;
 
+// inverse kinematic
+double low_back_forward[76];
+double low_up_down[31];
+double low_x = 298.3245;
+double low_y = 50.61898;
+double high_back_forward[46];
+double high_x = 206.8770178;
+double high_y = 201.4355107;
+bool inHigh = false;
+bool inLow = false;
+
 /* Function Prototype */
 //void setAngle(int, int);
 void toMiddle();
@@ -121,6 +132,22 @@ void setup(){
 
 	// Electromagnet
 	//pinMode(ELECTROMAGNET, OUTPUT);
+	
+	// initialize back-forward angle base on ud-down angle(low position)
+	for(int i = 45; i <= 75; i++){
+		low_back_forward[i] = acos((low_x+159.25*cos((240-i)*DEG_TO_RAD))/148)*RAD_TO_DEG;
+	  //Serial.println(low_back_forward[i]);
+	}
+
+	for(int i = 10; i <= 30; i++){
+		low_up_down[i] = 0.8674*i+42.529;
+		//Serial.println(low_up_down[i]);
+	}
+	
+	for(int i = 25; i <= 45; i++){
+		high_back_forward[i] = acos((high_x+159.25*cos((240-i)*DEG_TO_RAD))/148)*RAD_TO_DEG;
+		Serial.println(high_back_forward[i]);
+	}
 }
 
 void loop(){
@@ -217,12 +244,25 @@ void armControl(){
 	
 	// arm up
 	if(ps2x.Button(PSB_PAD_UP)){
-		if(udpos >= 30){
+		if(udpos >= 25){
 			udpos -= increment;
 			updown.write(udpos);
 			Serial.print("up-down: ");
 			Serial.println(udpos);
-			//delay(15);
+			
+			if(inLow && udpos >= 45 && udpos <= 75 && bfpos >= 10 && bfpos <= 30){
+				bfpos = (int)(low_back_forward[udpos]+0.5);
+				backforward.write(bfpos);
+				Serial.print("back-forward: ");
+				Serial.println(bfpos);
+			}
+			else if(inHigh && udpos >= 25 && udpos <= 45){
+				bfpos = (int)(high_back_forward[udpos]+0.5);
+				backforward.write(bfpos);
+				Serial.print("back-forward: ");
+				Serial.println(bfpos);
+			}
+			delay(10);
 		}
 		else{
 			Serial.println("up-down position reaches lower limit");
@@ -236,7 +276,20 @@ void armControl(){
 			updown.write(udpos);
 			Serial.print("up-down: ");
 			Serial.println(udpos);
-			//delay(15);
+			
+			if(inLow && udpos >= 45 && udpos <= 75 && bfpos >= 10 && bfpos <= 30){
+				bfpos = (int)(low_back_forward[udpos]+0.5);
+				backforward.write(bfpos);
+				Serial.print("back-forward: ");
+				Serial.println(bfpos);
+			}
+			else if(inHigh && udpos >= 25 && udpos <= 45){
+				bfpos = (int)(high_back_forward[udpos]+0.5);
+				backforward.write(bfpos);
+				Serial.print("back-forward: ");
+				Serial.println(bfpos);
+			}
+			delay(10);
 		}
 		else{
 			Serial.println("up-down position reaches upper limit");
@@ -250,7 +303,15 @@ void armControl(){
 			backforward.write(bfpos);
 			Serial.print("back-forward: ");
 			Serial.println(bfpos);
-				//delay(15); 
+			
+			if(inLow && bfpos >= 10 && bfpos <= 30 && udpos >= 45 && udpos <= 75){
+				udpos = (int)(low_up_down[bfpos]+0.5);
+				updown.write(udpos);
+				Serial.print("up-down: ");
+				Serial.println(udpos);
+			}
+			else if(inHigh){}
+			delay(10);
 		}
 		else{
 			Serial.println("back-forward position reaches upper limit");
@@ -264,7 +325,15 @@ void armControl(){
 			backforward.write(bfpos);
 			Serial.print("back-forward: ");
 			Serial.println(bfpos);
-			//delay(15);
+			
+			if(inLow && bfpos >= 10 && bfpos <= 30 && udpos >= 45 && udpos <= 75){
+				udpos = (int)(low_up_down[bfpos]+0.5);
+				updown.write(udpos);
+				Serial.print("updown: ");
+				Serial.println(udpos);
+			}
+			else if(inHigh){}
+			delay(10);
 		}
 		else{
 			Serial.println("back-forward position reaches lower limit");
@@ -298,6 +367,10 @@ void conveyorControl(){
 }*/
 
 void toMiddle(){
+	inHigh = false;
+	inLow = false;
+	increment = 2;
+	
 	Serial.println("to Middle");
 	int _increment = 0;
 	
@@ -320,6 +393,10 @@ void toMiddle(){
 }
 
 void toHigh(){
+	inHigh = true;
+	inLow = false;
+	increment = 1;
+	
 	Serial.println("to High");
 	int _increment = 0;
 
@@ -342,6 +419,10 @@ void toHigh(){
 }
 
 void toLow(){
+	inLow = true;
+	inHigh = false;
+	increment = 1;
+	
 	Serial.println("to Low");
 	int _increment = 0;
 
