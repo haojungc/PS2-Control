@@ -1,4 +1,4 @@
-/* Latest Update: 2019/6/11 17:00 */
+/* Latest Update: 2019/6/11 22:00 */
 /* New Features: add finished judgement, add impulse elimination*/
 
 #include <Servo.h>
@@ -23,7 +23,7 @@ const int ENA = 44;
 
 // gripper & arm positions
 const int gInit = 90;
-const int udMiddle = 80;
+const int udMiddle = 90;	// 80
 const int bfMiddle = 110; // don't be larger than 125
 const int udHigh = 35;
 const int bfHigh = 65;
@@ -33,7 +33,7 @@ const int bfLow = 20;
 // arm initial position
 int gpos = gInit, udpos = udMiddle, bfpos = bfMiddle;  //馬達初始位置要重抓
 
-byte x, y, prev_x = 127, prev_y = 128;
+byte x, y, prev_x = 128, prev_y = 127, prev_prev_x = 128, prev_prev_y = 127;
 int error = 0; 
 byte type = 0;
 byte vibrate = 0;
@@ -270,7 +270,6 @@ void armControl(){
 			Serial.println("back-forward position reaches lower limit");
 		}
 	}
-	delay(15);
 }
 
 void conveyorControl(){
@@ -287,7 +286,6 @@ void conveyorControl(){
 	else{
 		conveyor.spin(0);
 	}
-	delay(15);
 }
 
 /*void electromagnetControl(){
@@ -303,21 +301,21 @@ void toMiddle(){
 	Serial.println("to Middle");
 	int _increment = 0;
 	
-	_increment = udMiddle - udpos > 0 ? 1 : -1;
-	for(int i = udpos; i != udMiddle; i += _increment){
-		updown.write(i);
-		Serial.println(i);
-		delay(10);
-	}
-	udpos = udMiddle;
-                                                                                                                                                                                                                                                                                                             
 	_increment = bfMiddle - bfpos > 0 ? 1 : -1;
 	for(int i = bfpos; i != bfMiddle; i += _increment){
 		backforward.write(i);
-		Serial.println(i);
+		//Serial.println(i);
 		delay(10);  
 	}
 	bfpos = bfMiddle;
+	
+	_increment = udMiddle - udpos > 0 ? 1 : -1;
+	for(int i = udpos; i != udMiddle; i += _increment){
+		updown.write(i);
+		//Serial.println(i);
+		delay(10);
+	}
+	udpos = udMiddle;                                                                                                                                                                                                                                                                                                  
 	Serial.println("OK");
 }
 
@@ -328,7 +326,7 @@ void toHigh(){
 	_increment = (udHigh - udpos > 0) ? 1 : -1;
 	for(int i = udpos; i != udHigh; i += _increment){
 		updown.write(i);
-		Serial.println(i);
+		//Serial.println(i);
 		delay(10);
 	}
 	udpos = udHigh;
@@ -336,7 +334,7 @@ void toHigh(){
 	_increment = (bfHigh - bfpos > 0) ? 1 : -1;
 	for(int i = bfpos; i != bfHigh; i += _increment){
 		backforward.write(i);
-		Serial.println(i);
+		//Serial.println(i);
 		delay(10);  
 	}
 	bfpos = bfHigh;
@@ -351,7 +349,7 @@ void toLow(){
 	for(int i = udpos; i != udLow; i += _increment){
 		//ps2x.read_gamepad(false, vibrate);
 		updown.write(i);
-		Serial.println(i);
+		//Serial.println(i);
 		delay(10);
 	}
 	udpos = udLow;
@@ -359,7 +357,7 @@ void toLow(){
 	_increment = (bfLow - bfpos > 0) ? 1 : -1;
 	for(int i = bfpos; i != bfLow; i += _increment){
 		backforward.write(i);
-		Serial.println(i);
+		//Serial.println(i);
 		delay(10);
 	}
 	bfpos = bfLow;
@@ -395,8 +393,15 @@ void carMovement(){
 	x = ps2x.Analog(PSS_LX);
 	y = ps2x.Analog(PSS_LY);
 	
+	/*if(!(x == 128 && y == 127)){
+		Serial.print("x: ");
+		Serial.print(x);
+		Serial.print(", y: ");
+		Serial.println(y);
+	}*/
+	
 	// prevent impulse
-	if(x == prev_x && y == prev_y){
+	if(x == prev_x && y == prev_y && x == prev_prev_x && y == prev_prev_y){
 		// left-forward
 		if(x < 70 && y < 70){
 			Serial.println("Left-Forward");
@@ -469,6 +474,8 @@ void carMovement(){
 		}
 	}
 	else{	// refresh prev_x & prev_y when arduino detect different value
+		prev_prev_x = prev_x;
+		prev_prev_y = prev_y;
 		prev_x = x;
 		prev_y = y;
 	}
@@ -480,16 +487,33 @@ void rotate(){
 	
 	// prevent impulse
 	if(x == 255 && y == 255) return;
-	else if(x < 70){
-		Serial.println("Wheel rotate CW; Car rotate CCW");
-		motorA.spin(70, CW);
-		motorB.spin(70, CW);
-		motorC.spin(70, CW);
+	
+	if(mode == FAST){
+		if(x < 70){
+			Serial.println("Wheel rotate CW; Car rotate CCW");
+			motorA.spin(70, CW);
+			motorB.spin(70, CW);
+			motorC.spin(70, CW);
+		}
+		else if(x > 184){
+			Serial.println("Wheel rotate CCW; Car rotate CW");
+			motorA.spin(70, CCW);
+			motorB.spin(70, CCW);
+			motorC.spin(70, CCW);
+		}
 	}
-	else if(x > 184){
-		Serial.println("Wheel rotate CCW; Car rotate CW");
-		motorA.spin(70, CCW);
-		motorB.spin(70, CCW);
-		motorC.spin(70, CCW);
+	else if(mode == SLOW){
+		if(x < 70){
+			Serial.println("Wheel rotate CW; Car rotate CCW");
+			motorA.spin(35, CW);
+			motorB.spin(35, CW);
+			motorC.spin(35, CW);
+		}
+		else if(x > 184){
+			Serial.println("Wheel rotate CCW; Car rotate CW");
+			motorA.spin(35, CCW);
+			motorB.spin(35, CCW);
+			motorC.spin(35, CCW);
+		}
 	}
 }
