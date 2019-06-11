@@ -1,28 +1,30 @@
-/* Latest Update: 2019/6/10 16:40 */
+/* Latest Update: 2019/6/11 17:00 */
 /* New Features: add finished judgement, add impulse elimination*/
 
-#include "PS2X_lib.h"
 #include <Servo.h>
+#include "PS2X_lib.h"
 #include "DCmotor.h"
 
 PS2X ps2x;
 Servo gripper, updown, backforward;
 MOTOR motorA, motorB, motorC, conveyor;
 
+#define FAST true
+#define SLOW false
 //#define GRIPPER 44
 #define BACKFORWARD 45
 #define UPDOWN 46
-#define ELECTROMAGNET 47
-#define NAN -100000
+//#define ELECTROMAGNET 47
 
+// gripper pins
 const int IN1 = 42;
 const int IN2 = 43;
 const int ENA = 44;
 
+// gripper & arm positions
 const int gInit = 90;
 const int udMiddle = 80;
 const int bfMiddle = 110; // don't be larger than 125
-
 const int udHigh = 35;
 const int bfHigh = 65;
 const int udLow = 60;
@@ -37,9 +39,13 @@ byte type = 0;
 byte vibrate = 0;
 int val = 0;
 int increment = 2;
+bool mode = FAST;
+
+// DC Motor Speed
+int fullspeed = 128;
+int halfspeed = 64;
 
 /* Function Prototype */
-// turn to target angle slowly (updown, backforward)
 //void setAngle(int, int);
 void toMiddle();
 void toHigh();
@@ -49,7 +55,7 @@ void rotate();
 void gripControl();
 void armControl();
 void conveyorControl();
-void electromagnetControl();
+//void electromagnetControl();
 
 void setup(){
  Serial.begin(57600);
@@ -85,86 +91,87 @@ void setup(){
        break;
      }
 
-  /* Set Pin */
-  // set gripper pin
-  pinMode(IN1, OUTPUT);
-  pinMode(IN2, OUTPUT);
-  pinMode(ENA, OUTPUT);
+	/* Set Pin */
+	// set gripper pin
+	pinMode(IN1, OUTPUT);
+	pinMode(IN2, OUTPUT);
+	pinMode(ENA, OUTPUT);
   
-  // set arm pin
-  //gripper.attach(GRIPPER);
-  backforward.attach(BACKFORWARD);
-  updown.attach(UPDOWN);
+	// set gripper & arm pins
+	//gripper.attach(GRIPPER);
+	backforward.attach(BACKFORWARD);
+	updown.attach(UPDOWN);
 
-  // set DC motor pin
-  motorA.setPin(2, 3);
-  motorB.setPin(4, 5);
-  motorC.setPin(6, 7);
-  conveyor.setPin(8, 9);
+	// set DC motor pin
+	motorA.setPin(2, 3);
+	motorB.setPin(4, 5);
+	motorC.setPin(6, 7);
+	conveyor.setPin(8, 9);
 
-  /* Initialize */
-  // DC motor
-  motorA.spin(0);
-  motorB.spin(0);
-  motorC.spin(0);
+	/* Initialize */
+	// DC motor
+	motorA.spin(0);
+	motorB.spin(0);
+	motorC.spin(0);
 
-  // Arm
-  //gripper.write(gpos);
-  backforward.write(bfpos);
-  updown.write(udpos);
+	// Arm
+	//gripper.write(gpos);
+	backforward.write(bfMiddle);
+	updown.write(udMiddle);
 
-  // Electromagnet
-  pinMode(ELECTROMAGNET, OUTPUT);
-  
-  delay(15);
+	// Electromagnet
+	//pinMode(ELECTROMAGNET, OUTPUT);
 }
 
 void loop(){
- if(error == 1) // skip loop if no controller found
-  return; 
+	if(error == 1) // skip loop if no controller found
+		return; 
   
- if(type == 2){} // Guitar Hero Controller
+	if(type == 2){} // Guitar Hero Controller
 
- else { //DualShock Controller
-    ps2x.read_gamepad(false, vibrate); // read controller and set large motor to spin at 'vibrate' speed
-    //vibrate = ps2x.Analog(PSAB_BLUE);        //this will set the large motor vibrate speed based on 
-                                             //how hard you press the blue (X) button 
+	else { //DualShock Controller
+		ps2x.read_gamepad(false, vibrate); // read controller and set large motor to spin at 'vibrate' speed
 
-    /* gripper: Square & Triangle */
-	gripControl();
+		/* switch mode: fast & slow */
+		if(ps2x.ButtonPressed(PSB_SELECT)){
+			if(mode == FAST){
+				Serial.println("Slow Mode");
+				mode = SLOW;
+				increment = 1;
+				fullspeed = 80;
+				halfspeed = 40;
+			}
+			else{
+				Serial.println("Fast Mode");
+				mode = FAST;
+				increment = 2;
+				fullspeed = 128;
+				halfspeed = 64;
+			}	
+		}
 
-    /* Arm: UP, DOWN, LEFT, RIGHT, Circle, L2, R2 */
-	armControl();
+		/* gripper: Square & Triangle */
+		gripControl();
+
+		/* Arm: UP, DOWN, LEFT, RIGHT, Circle, L2, R2 */
+		armControl();
     
-    /* Conveyor Spin: L1, R1 */
-	conveyorControl();
+		/* Conveyor Spin: L1, R1 */
+		conveyorControl();
     
-    /* Electromagnet: L2, R2 */
-	//electromagnetControl();
+		/* Electromagnet: L2, R2 */
+		//electromagnetControl();
 
-    /* DC Motor Spin */
-    carMovement();
+		/* DC Motor Spin */
+		carMovement();
 
-    /* Wheel spin CW/CCW */
-    rotate();
- }
- 
- delay(15); 
+		/* Wheel spin CW/CCW */
+		rotate();
+	}
+	delay(15); 
 }
 
-void gripControl(){
-	//static int pressedButton, prevButton = NAN;
-	
-	/*if(ps2x.ButtonPressed(PSB_GREEN)){
-		pressedButton = PSB_GREEN;
-	}
-	else if(ps2x.ButtonPressed(PSB_PINK)){
-		pressedButton = PSB_PINK;
-	}
-	else{
-		pressedButton = NAN;
-	}*/
-	
+void gripControl(){	
 	// gripper grip: press green triangle
 	if(ps2x.Button(PSB_GREEN)){
 		Serial.println("Green pressed: Gripping");
@@ -172,12 +179,6 @@ void gripControl(){
 		digitalWrite(IN2, LOW);
 		analogWrite(ENA, 255);
 		//gripper.write(0);
-		/*if(prevButton == PSB_GREEN){
-			
-		}
-		else{
-			gripper.write(90);
-		}*/
 	}
 	// gripper release: press pink square
 	else if(ps2x.Button(PSB_PINK)){
@@ -186,12 +187,6 @@ void gripControl(){
 		digitalWrite(IN2, HIGH);
 		analogWrite(ENA, 255);
 		//gripper.write(180);
-		/*if(prevButton == PSB_PINK){
-			
-		}
-		else{
-			gripper.write(90);
-		}*/
 	}
 	else{
 		digitalWrite(IN1, LOW);
@@ -199,18 +194,9 @@ void gripControl(){
 		analogWrite(ENA, 0);
 		//gripper.write(90);
 	}
-	
-	//prevButton = pressedButton;
-	delay(15);
 }
 
 void armControl(){
-	//finished = false;
-	// switch mode: fast and slow
-	if(ps2x.ButtonPressed(PSB_SELECT)){
-		increment = (increment == 1) ? 2 : 1;
-	}
-    
 	// go to original position
 	if(ps2x.ButtonPressed(PSB_RED)){
 		Serial.println("CIRCLE PRESSED");
@@ -304,33 +290,29 @@ void conveyorControl(){
 	delay(15);
 }
 
-void electromagnetControl(){
+/*void electromagnetControl(){
 	if(ps2x.ButtonPressed(PSB_L2)){
-      digitalWrite(ELECTROMAGNET, HIGH);
+		digitalWrite(ELECTROMAGNET, HIGH);
     }
     else if(ps2x.ButtonPressed(PSB_R2)){
-      digitalWrite(ELECTROMAGNET, LOW);
+		digitalWrite(ELECTROMAGNET, LOW);
     }
-}
+}*/
 
 void toMiddle(){
 	Serial.println("to Middle");
 	int _increment = 0;
 	
-	//ps2x.read_gamepad(false, vibrate);
 	_increment = udMiddle - udpos > 0 ? 1 : -1;
 	for(int i = udpos; i != udMiddle; i += _increment){
-		//ps2x.read_gamepad(false, vibrate);
 		updown.write(i);
 		Serial.println(i);
 		delay(10);
 	}
 	udpos = udMiddle;
-
-  //ps2x.read_gamepad(false, vibrate);                                                                                                                                                                                                                                                                                                                
+                                                                                                                                                                                                                                                                                                             
 	_increment = bfMiddle - bfpos > 0 ? 1 : -1;
 	for(int i = bfpos; i != bfMiddle; i += _increment){
-		//ps2x.read_gamepad(false, vibrate);
 		backforward.write(i);
 		Serial.println(i);
 		delay(10);  
@@ -343,20 +325,16 @@ void toHigh(){
 	Serial.println("to High");
 	int _increment = 0;
 
-  //ps2x.read_gamepad(false, vibrate);
 	_increment = (udHigh - udpos > 0) ? 1 : -1;
 	for(int i = udpos; i != udHigh; i += _increment){
-		//ps2x.read_gamepad(false, vibrate);
 		updown.write(i);
 		Serial.println(i);
 		delay(10);
 	}
 	udpos = udHigh;
-
-  //ps2x.read_gamepad(false, vibrate);                                                                                                                                                                                                                                                                                                              
+                                                                                                                                                                                                                                                                                                           
 	_increment = (bfHigh - bfpos > 0) ? 1 : -1;
 	for(int i = bfpos; i != bfHigh; i += _increment){
-		//ps2x.read_gamepad(false, vibrate);
 		backforward.write(i);
 		Serial.println(i);
 		delay(10);  
@@ -369,7 +347,6 @@ void toLow(){
 	Serial.println("to Low");
 	int _increment = 0;
 
-  //ps2x.read_gamepad(false, vibrate);
 	_increment = (udLow - udpos > 0) ? 1 : -1;
 	for(int i = udpos; i != udLow; i += _increment){
 		//ps2x.read_gamepad(false, vibrate);
@@ -378,20 +355,18 @@ void toLow(){
 		delay(10);
 	}
 	udpos = udLow;
-
-  //ps2x.read_gamepad(false, vibrate);                                                                                                                                                                                                                                                                                                             
+                                                                                                                                                                                                                                                                                                           
 	_increment = (bfLow - bfpos > 0) ? 1 : -1;
 	for(int i = bfpos; i != bfLow; i += _increment){
-		//ps2x.read_gamepad(false, vibrate);
 		backforward.write(i);
 		Serial.println(i);
-		delay(10);  
+		delay(10);
 	}
 	bfpos = bfLow;
 	Serial.println("OK");
 }
-/*
-void setAngle(int udpos_new, int bfpos_new){
+
+/*void setAngle(int udpos_new, int bfpos_new){
     if(finished){
 		finished = false;
 		int _increment = 0;
@@ -425,23 +400,24 @@ void carMovement(){
 		// left-forward
 		if(x < 70 && y < 70){
 			Serial.println("Left-Forward");
-			motorA.spin(MOTOR::fullspeed, CW);
-			motorB.spin(MOTOR::fullspeed, CCW);
+			motorA.spin(fullspeed, CW);
+			motorB.spin(fullspeed, CCW);
 			motorC.spin(0);
 		}
+		
 		// right-forward
 		else if(x > 184 && y < 70){
 			Serial.println("Right-Forward");
 			motorA.spin(0);
-			motorB.spin(MOTOR::fullspeed, CCW);
-			motorC.spin(MOTOR::fullspeed, CW);
+			motorB.spin(fullspeed, CCW);
+			motorC.spin(fullspeed, CW);
 		}
 		
 		// right-backward
 		else if(x > 184 && y > 184){
 			Serial.println("Right-Backward");
-			motorA.spin(MOTOR::fullspeed, CCW);
-			motorB.spin(MOTOR::fullspeed, CW);
+			motorA.spin(fullspeed, CCW);
+			motorB.spin(fullspeed, CW);
 			motorC.spin(0);
 		}
 		
@@ -449,40 +425,40 @@ void carMovement(){
 		else if(x < 70 && y > 184){
 			Serial.println("Left-Backward");
 			motorA.spin(0);
-			motorB.spin(MOTOR::fullspeed, CW);
-			motorC.spin(MOTOR::fullspeed, CCW);
+			motorB.spin(fullspeed, CW);
+			motorC.spin(fullspeed, CCW);
 		}
 		
 		// forward
 		else if(x > 70 && x < 184 && y < 70){
 			Serial.println("Forward");
-			motorA.spin(MOTOR::halfspeed, CW);
-			motorB.spin(MOTOR::fullspeed, CCW);
-			motorC.spin(MOTOR::halfspeed, CW);
+			motorA.spin(halfspeed, CW);
+			motorB.spin(fullspeed, CCW);
+			motorC.spin(halfspeed, CW);
 		}
 		
 		// right
 		else if(x > 184 && y > 70 && y < 184){
 			Serial.println("Right");
-			motorA.spin(MOTOR::fullspeed, CCW);
+			motorA.spin(fullspeed, CCW);
 			motorB.spin(0);
-			motorC.spin(MOTOR::fullspeed, CW);
+			motorC.spin(fullspeed, CW);
 		}
 		
 		// backward
 		else if(x > 70 && x < 184 && y > 184){
 			Serial.println("Backward");
-			motorA.spin(MOTOR::halfspeed, CCW);
-			motorB.spin(MOTOR::fullspeed, CW);
-			motorC.spin(MOTOR::halfspeed, CCW);
+			motorA.spin(halfspeed, CCW);
+			motorB.spin(fullspeed, CW);
+			motorC.spin(halfspeed, CCW);
 		}
 		
 		// left
 		else if(x < 70 && y > 70 && y < 184){
 			Serial.println("Left");
-			motorA.spin(MOTOR::fullspeed, CW);
+			motorA.spin(fullspeed, CW);
 			motorB.spin(0);
-			motorC.spin(MOTOR::fullspeed, CCW);
+			motorC.spin(fullspeed, CCW);
 		}
 		
 		// stop

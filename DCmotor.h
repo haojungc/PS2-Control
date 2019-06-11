@@ -14,8 +14,8 @@ class MOTOR{
 		void spin();
 		void spin(int);
 		void spin(int, bool);
-		static const int fullspeed = 128;
-		static const int halfspeed = 64;
+		//static const int fullspeed = 128;
+		//static const int halfspeed = 64;
 	
 	private:
 		int speed;
