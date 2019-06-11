@@ -1,7 +1,7 @@
 /* Latest Update: 2019/6/10 16:40 */
 /* New Features: add finished judgement, add impulse elimination*/
 
-#include <PS2X_lib.h>
+#include "PS2X_lib.h"
 #include <Servo.h>
 #include "DCmotor.h"
 
@@ -9,22 +9,27 @@ PS2X ps2x;
 Servo gripper, updown, backforward;
 MOTOR motorA, motorB, motorC, conveyor;
 
-#define GRIPPER 44
+//#define GRIPPER 44
 #define BACKFORWARD 45
 #define UPDOWN 46
 #define ELECTROMAGNET 47
+#define NAN -100000
+
+const int IN1 = 42;
+const int IN2 = 43;
+const int ENA = 44;
 
 const int gInit = 90;
-const int udInit = 80;
-const int bfInit = 110; // don't be larger than 125
+const int udMiddle = 80;
+const int bfMiddle = 110; // don't be larger than 125
 
-const int ud_upperFloor = 35;
-const int bf_upperFloor = 65;
-const int ud_lowerFloor = 70;
-const int bf_lowerFloor = 40;
+const int udHigh = 35;
+const int bfHigh = 65;
+const int udLow = 60;
+const int bfLow = 20;
 
 // arm initial position
-int gpos = gInit, udpos = udInit, bfpos = bfInit;  //馬達初始位置要重抓
+int gpos = gInit, udpos = udMiddle, bfpos = bfMiddle;  //馬達初始位置要重抓
 
 byte x, y, prev_x = 127, prev_y = 128;
 int error = 0; 
@@ -32,11 +37,13 @@ byte type = 0;
 byte vibrate = 0;
 int val = 0;
 int increment = 2;
-bool finished = true;
 
 /* Function Prototype */
 // turn to target angle slowly (updown, backforward)
-void setAngle(int, int);
+//void setAngle(int, int);
+void toMiddle();
+void toHigh();
+void toLow();
 void carMovement(); // read LX & LY
 void rotate();
 void gripControl();
@@ -79,8 +86,13 @@ void setup(){
      }
 
   /* Set Pin */
+  // set gripper pin
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(ENA, OUTPUT);
+  
   // set arm pin
-  gripper.attach(GRIPPER);
+  //gripper.attach(GRIPPER);
   backforward.attach(BACKFORWARD);
   updown.attach(UPDOWN);
 
@@ -97,12 +109,13 @@ void setup(){
   motorC.spin(0);
 
   // Arm
-  gripper.write(gpos);
+  //gripper.write(gpos);
   backforward.write(bfpos);
   updown.write(udpos);
 
   // Electromagnet
   pinMode(ELECTROMAGNET, OUTPUT);
+  
   delay(15);
 }
 
@@ -136,111 +149,142 @@ void loop(){
     rotate();
  }
  
- delay(30); 
+ delay(15); 
 }
 
 void gripControl(){
-	if(finished){
-		finished = false;
-		// gripper grip: press green triangle
-		if(ps2x.Button(PSB_GREEN)){
-			Serial.println("Green pressed: Gripping");
-			gripper.write(0);
-		}
-		// gripper release: press pink square
-		else if(ps2x.Button(PSB_PINK)){
-			Serial.println("Pink pressed: Releasing");
-			gripper.write(180);
+	//static int pressedButton, prevButton = NAN;
+	
+	/*if(ps2x.ButtonPressed(PSB_GREEN)){
+		pressedButton = PSB_GREEN;
+	}
+	else if(ps2x.ButtonPressed(PSB_PINK)){
+		pressedButton = PSB_PINK;
+	}
+	else{
+		pressedButton = NAN;
+	}*/
+	
+	// gripper grip: press green triangle
+	if(ps2x.Button(PSB_GREEN)){
+		Serial.println("Green pressed: Gripping");
+		digitalWrite(IN1, HIGH);
+		digitalWrite(IN2, LOW);
+		analogWrite(ENA, 255);
+		//gripper.write(0);
+		/*if(prevButton == PSB_GREEN){
+			
 		}
 		else{
 			gripper.write(90);
-		}
-		delay(15);
-		finished = true;
+		}*/
 	}
+	// gripper release: press pink square
+	else if(ps2x.Button(PSB_PINK)){
+		Serial.println("Pink pressed: Releasing");
+		digitalWrite(IN1, LOW);
+		digitalWrite(IN2, HIGH);
+		analogWrite(ENA, 255);
+		//gripper.write(180);
+		/*if(prevButton == PSB_PINK){
+			
+		}
+		else{
+			gripper.write(90);
+		}*/
+	}
+	else{
+		digitalWrite(IN1, LOW);
+		digitalWrite(IN2, LOW);
+		analogWrite(ENA, 0);
+		//gripper.write(90);
+	}
+	
+	//prevButton = pressedButton;
+	delay(15);
 }
 
 void armControl(){
-	if(finished){
-		//finished = false;
-		// switch mode: fast and slow
-		if(ps2x.ButtonPressed(PSB_SELECT)){
-			increment = (increment == 1) ? 2 : 1;
-		}
-    
-		// go to original position
-		if(ps2x.ButtonPressed(PSB_RED)){
-			Serial.println("CIRCLE PRESSED");
-			setAngle(udInit, bfInit);	// udInit, bfInit
-		}
-		// go to upper floor
-		else if(ps2x.ButtonPressed(PSB_L2)){
-			Serial.println("L2 PRESSED");
-			setAngle(ud_upperFloor, bf_upperFloor);
-		}
-		// go to lower floor
-		else if(ps2x.ButtonPressed(PSB_R2)){
-			Serial.println("R2 Pressed");
-			setAngle(ud_lowerFloor, bf_lowerFloor);
-		}
-    
-		// arm up
-		if(ps2x.Button(PSB_PAD_UP)){
-			if(udpos >= 30){
-				udpos -= increment;
-				updown.write(udpos);
-				Serial.print("up-down: ");
-				Serial.println(udpos);
-				//delay(15);
-			}
-			else{
-				Serial.println("up-down position reaches lower limit");
-			}
-		}
-
-		// arm down
-		if(ps2x.Button(PSB_PAD_DOWN)){
-			if(udpos <= 150){
-				udpos += increment;
-				updown.write(udpos);
-				Serial.print("up-down: ");
-				Serial.println(udpos);
-				//delay(15);
-			}
-			else{
-				Serial.println("up-down position reaches upper limit");
-			}
-		}
-    
-		// arm forward
-		if(ps2x.Button(PSB_PAD_LEFT)){
-				if(bfpos <= 110){
-					bfpos += increment;
-					backforward.write(bfpos);
-					Serial.print("back-forward: ");
-					Serial.println(bfpos);
-					//delay(15); 
-				}
-				else{
-					Serial.println("back-forward position reaches upper limit");
-				}
-		}
-
-		// arm back
-		if(ps2x.Button(PSB_PAD_RIGHT)){ 
-			if(bfpos >= 10){
-				bfpos -= increment;
-				backforward.write(bfpos);
-				Serial.print("back-forward: ");
-				Serial.println(bfpos);
-				//delay(15);
-			}
-			else{
-				Serial.println("back-forward position reaches lower limit");
-			}
-		}
-		delay(15);
+	//finished = false;
+	// switch mode: fast and slow
+	if(ps2x.ButtonPressed(PSB_SELECT)){
+		increment = (increment == 1) ? 2 : 1;
 	}
+    
+	// go to original position
+	if(ps2x.ButtonPressed(PSB_RED)){
+		Serial.println("CIRCLE PRESSED");
+		toMiddle();
+	}
+
+	// go to lower floor
+    if(ps2x.ButtonPressed(PSB_R2)){
+		Serial.println("R2 Pressed");
+		toLow();
+    }
+   
+	// go to upper floor
+	if(ps2x.ButtonPressed(PSB_L2)){
+		Serial.println("L2 PRESSED");
+		toHigh();
+	}
+	
+	// arm up
+	if(ps2x.Button(PSB_PAD_UP)){
+		if(udpos >= 30){
+			udpos -= increment;
+			updown.write(udpos);
+			Serial.print("up-down: ");
+			Serial.println(udpos);
+			//delay(15);
+		}
+		else{
+			Serial.println("up-down position reaches lower limit");
+		}
+	}
+
+	// arm down
+	if(ps2x.Button(PSB_PAD_DOWN)){
+		if(udpos <= 150){
+			udpos += increment;
+			updown.write(udpos);
+			Serial.print("up-down: ");
+			Serial.println(udpos);
+			//delay(15);
+		}
+		else{
+			Serial.println("up-down position reaches upper limit");
+		}
+	}
+    
+	// arm forward
+	if(ps2x.Button(PSB_PAD_LEFT)){
+		if(bfpos <= 110){
+			bfpos += increment;
+			backforward.write(bfpos);
+			Serial.print("back-forward: ");
+			Serial.println(bfpos);
+				//delay(15); 
+		}
+		else{
+			Serial.println("back-forward position reaches upper limit");
+		}
+	}
+
+	// arm back
+	if(ps2x.Button(PSB_PAD_RIGHT)){ 
+		if(bfpos >= 10){
+			bfpos -= increment;
+			backforward.write(bfpos);
+			Serial.print("back-forward: ");
+			Serial.println(bfpos);
+			//delay(15);
+		}
+		else{
+			Serial.println("back-forward position reaches lower limit");
+		}
+	}
+	delay(15);
 }
 
 void conveyorControl(){
@@ -269,6 +313,84 @@ void electromagnetControl(){
     }
 }
 
+void toMiddle(){
+	Serial.println("to Middle");
+	int _increment = 0;
+	
+	//ps2x.read_gamepad(false, vibrate);
+	_increment = udMiddle - udpos > 0 ? 1 : -1;
+	for(int i = udpos; i != udMiddle; i += _increment){
+		//ps2x.read_gamepad(false, vibrate);
+		updown.write(i);
+		Serial.println(i);
+		delay(10);
+	}
+	udpos = udMiddle;
+
+  //ps2x.read_gamepad(false, vibrate);                                                                                                                                                                                                                                                                                                                
+	_increment = bfMiddle - bfpos > 0 ? 1 : -1;
+	for(int i = bfpos; i != bfMiddle; i += _increment){
+		//ps2x.read_gamepad(false, vibrate);
+		backforward.write(i);
+		Serial.println(i);
+		delay(10);  
+	}
+	bfpos = bfMiddle;
+	Serial.println("OK");
+}
+
+void toHigh(){
+	Serial.println("to High");
+	int _increment = 0;
+
+  //ps2x.read_gamepad(false, vibrate);
+	_increment = (udHigh - udpos > 0) ? 1 : -1;
+	for(int i = udpos; i != udHigh; i += _increment){
+		//ps2x.read_gamepad(false, vibrate);
+		updown.write(i);
+		Serial.println(i);
+		delay(10);
+	}
+	udpos = udHigh;
+
+  //ps2x.read_gamepad(false, vibrate);                                                                                                                                                                                                                                                                                                              
+	_increment = (bfHigh - bfpos > 0) ? 1 : -1;
+	for(int i = bfpos; i != bfHigh; i += _increment){
+		//ps2x.read_gamepad(false, vibrate);
+		backforward.write(i);
+		Serial.println(i);
+		delay(10);  
+	}
+	bfpos = bfHigh;
+	Serial.println("OK");
+}
+
+void toLow(){
+	Serial.println("to Low");
+	int _increment = 0;
+
+  //ps2x.read_gamepad(false, vibrate);
+	_increment = (udLow - udpos > 0) ? 1 : -1;
+	for(int i = udpos; i != udLow; i += _increment){
+		//ps2x.read_gamepad(false, vibrate);
+		updown.write(i);
+		Serial.println(i);
+		delay(10);
+	}
+	udpos = udLow;
+
+  //ps2x.read_gamepad(false, vibrate);                                                                                                                                                                                                                                                                                                             
+	_increment = (bfLow - bfpos > 0) ? 1 : -1;
+	for(int i = bfpos; i != bfLow; i += _increment){
+		//ps2x.read_gamepad(false, vibrate);
+		backforward.write(i);
+		Serial.println(i);
+		delay(10);  
+	}
+	bfpos = bfLow;
+	Serial.println("OK");
+}
+/*
 void setAngle(int udpos_new, int bfpos_new){
     if(finished){
 		finished = false;
@@ -292,7 +414,7 @@ void setAngle(int udpos_new, int bfpos_new){
 		Serial.println("OK");
 		finished = true;
 	}
-}
+}*/
 
 void carMovement(){
 	x = ps2x.Analog(PSS_LX);
@@ -384,14 +506,14 @@ void rotate(){
 	if(x == 255 && y == 255) return;
 	else if(x < 70){
 		Serial.println("Wheel rotate CW; Car rotate CCW");
-		motorA.spin(MOTOR::halfspeed, CW);
-		motorB.spin(MOTOR::halfspeed, CW);
-		motorC.spin(MOTOR::halfspeed, CW);
+		motorA.spin(70, CW);
+		motorB.spin(70, CW);
+		motorC.spin(70, CW);
 	}
 	else if(x > 184){
 		Serial.println("Wheel rotate CCW; Car rotate CW");
-		motorA.spin(MOTOR::halfspeed, CCW);
-		motorB.spin(MOTOR::halfspeed, CCW);
-		motorC.spin(MOTOR::halfspeed, CCW);
+		motorA.spin(70, CCW);
+		motorB.spin(70, CCW);
+		motorC.spin(70, CCW);
 	}
 }
