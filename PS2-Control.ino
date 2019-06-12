@@ -1,13 +1,15 @@
-/* Latest Update: 2019/6/11 22:00 */
-/* New Features: add finished judgement, add impulse elimination*/
+/* Latest Update: 2019/6/13 00:00 */
+/* New Features: improve inverse kinematic*/
 
 #include <Servo.h>
 #include "PS2X_lib.h"
 #include "DCmotor.h"
+#include "Arm_Movement.h"
 
 PS2X ps2x;
 Servo gripper, updown, backforward;
-MOTOR motorA, motorB, motorC, conveyor;
+MOTOR motorA, motorB, motorC;
+//MOTOR conveyor;
 
 #define FAST true
 #define SLOW false
@@ -15,6 +17,7 @@ MOTOR motorA, motorB, motorC, conveyor;
 #define BACKFORWARD 45
 #define UPDOWN 46
 //#define ELECTROMAGNET 47
+#define NAN -1
 
 // gripper pins
 const int IN1 = 42;
@@ -23,15 +26,15 @@ const int ENA = 44;
 
 // gripper & arm positions
 const int gInit = 90;
-const int udMiddle = 90;	// 80
-const int bfMiddle = 110; // don't be larger than 125
+const int udMiddle = 95;	// 80
+const int bfMiddle = 105; // don't be larger than 125
 const int udHigh = 35;
 const int bfHigh = 65;
 const int udLow = 60;
 const int bfLow = 20;
 
 // arm initial position
-int gpos = gInit, udpos = udMiddle, bfpos = bfMiddle;  //馬達初始位置要重抓
+int gpos = gInit, udpos = udMiddle, bfpos = bfMiddle;
 
 byte x, y, prev_x = 128, prev_y = 127, prev_prev_x = 128, prev_prev_y = 127;
 int error = 0; 
@@ -40,21 +43,18 @@ byte vibrate = 0;
 int val = 0;
 int increment = 2;
 bool mode = FAST;
+int vibrate_count = 2;
+bool first_vibrate = true;
+
+int now, last_read = 0;
+int rotateTime, prev_rotateTime = 0;
 
 // DC Motor Speed
-int fullspeed = 128;
-int halfspeed = 64;
+int fullspeed = 192;
+int halfspeed = 96;
 
 // inverse kinematic
-double low_back_forward[76];
-double low_up_down[31];
-double low_x = 298.3245;
-double low_y = 50.61898;
-double high_back_forward[46];
-double high_x = 206.8770178;
-double high_y = 201.4355107;
-bool inHigh = false;
-bool inLow = false;
+double arm_x;
 
 /* Function Prototype */
 //void setAngle(int, int);
@@ -65,8 +65,9 @@ void carMovement(); // read LX & LY
 void rotate();
 void gripControl();
 void armControl();
-void conveyorControl();
+//void conveyorControl();
 //void electromagnetControl();
+void switchMode();
 
 void setup(){
  Serial.begin(57600);
@@ -117,7 +118,7 @@ void setup(){
 	motorA.setPin(2, 3);
 	motorB.setPin(4, 5);
 	motorC.setPin(6, 7);
-	conveyor.setPin(8, 9);
+	//conveyor.setPin(8, 9);
 
 	/* Initialize */
 	// DC motor
@@ -132,22 +133,6 @@ void setup(){
 
 	// Electromagnet
 	//pinMode(ELECTROMAGNET, OUTPUT);
-	
-	// initialize back-forward angle base on ud-down angle(low position)
-	for(int i = 45; i <= 75; i++){
-		low_back_forward[i] = acos((low_x+159.25*cos((240-i)*DEG_TO_RAD))/148)*RAD_TO_DEG;
-	  //Serial.println(low_back_forward[i]);
-	}
-
-	for(int i = 10; i <= 30; i++){
-		low_up_down[i] = 0.8674*i+42.529;
-		//Serial.println(low_up_down[i]);
-	}
-	
-	for(int i = 25; i <= 45; i++){
-		high_back_forward[i] = acos((high_x+159.25*cos((240-i)*DEG_TO_RAD))/148)*RAD_TO_DEG;
-		Serial.println(high_back_forward[i]);
-	}
 }
 
 void loop(){
@@ -160,22 +145,7 @@ void loop(){
 		ps2x.read_gamepad(false, vibrate); // read controller and set large motor to spin at 'vibrate' speed
 
 		/* switch mode: fast & slow */
-		if(ps2x.ButtonPressed(PSB_SELECT)){
-			if(mode == FAST){
-				Serial.println("Slow Mode");
-				mode = SLOW;
-				increment = 1;
-				fullspeed = 80;
-				halfspeed = 40;
-			}
-			else{
-				Serial.println("Fast Mode");
-				mode = FAST;
-				increment = 2;
-				fullspeed = 128;
-				halfspeed = 64;
-			}	
-		}
+		switchMode();	// set vibrate values
 
 		/* gripper: Square & Triangle */
 		gripControl();
@@ -184,7 +154,7 @@ void loop(){
 		armControl();
     
 		/* Conveyor Spin: L1, R1 */
-		conveyorControl();
+		//conveyorControl();
     
 		/* Electromagnet: L2, R2 */
 		//electromagnetControl();
@@ -193,15 +163,88 @@ void loop(){
 		carMovement();
 
 		/* Wheel spin CW/CCW */
-		rotate();
+		rotateTime = millis();
+		if(rotateTime - prev_rotateTime > 15){
+			rotate();
+			prev_rotateTime = rotateTime;
+		}
 	}
 	delay(15); 
+}
+
+void switchMode(){
+	// set vibrate values
+	if(vibrate_count == 1){
+		now = millis();
+		if(now - last_read > 500){
+			vibrate = 0;
+			vibrate_count = 0;
+		}
+	}
+	else if(vibrate_count == 2){
+		now = millis();
+		if(first_vibrate){
+			if(now - last_read > 400){
+				first_vibrate = false;
+				vibrate = 0;
+				last_read = now;
+			}
+		}
+		else{
+			if(now - last_read > 200){
+				first_vibrate = true;
+				vibrate = 255;
+				vibrate_count--;
+				last_read = now;
+			}
+		}
+	}
+
+	// switch mode: fast & slow
+	if(ps2x.ButtonReleased(PSB_L3) || ps2x.ButtonReleased(PSB_R3)){
+		if(mode == FAST){
+			Serial.println("Slow Mode");
+			mode = SLOW;
+			vibrate_count = 1;
+			increment = 1;
+			fullspeed = 80;
+			halfspeed = 40;
+			vibrate = 255;
+			last_read = millis();
+		}
+		else{
+			Serial.println("Fast Mode");
+			mode = FAST;
+			vibrate_count = 2;
+			increment = 2;
+			fullspeed = 192;
+			halfspeed = 96;
+			vibrate = 255;
+			last_read = millis();
+		}	
+	}
+	/*if(ps2x.ButtonPressed(PSB_SELECT)){
+		if(mode == FAST){
+			//Serial.println("Slow Mode");
+			mode = SLOW;
+			increment = 1;
+			fullspeed = 80;
+			halfspeed = 40;
+		}
+		else{
+			//Serial.println("Fast Mode");
+			mode = FAST;
+			increment = 2;
+			fullspeed = 192;
+			halfspeed = 96;
+		}	
+	}*/
 }
 
 void gripControl(){	
 	// gripper grip: press green triangle
 	if(ps2x.Button(PSB_GREEN)){
-		Serial.println("Green pressed: Gripping");
+		//Serial.println("Green pressed: Gripping");
 		digitalWrite(IN1, HIGH);
 		digitalWrite(IN2, LOW);
 		analogWrite(ENA, 255);
@@ -209,7 +252,7 @@ void gripControl(){
 	}
 	// gripper release: press pink square
 	else if(ps2x.Button(PSB_PINK)){
-		Serial.println("Pink pressed: Releasing");
+		//Serial.println("Pink pressed: Releasing");
 		digitalWrite(IN1, LOW);
 		digitalWrite(IN2, HIGH);
 		analogWrite(ENA, 255);
@@ -224,138 +267,211 @@ void gripControl(){
 }
 
 void armControl(){
+	static int prev_button = NAN;
+	
 	// go to original position
 	if(ps2x.ButtonPressed(PSB_RED)){
-		Serial.println("CIRCLE PRESSED");
+		//Serial.println("CIRCLE PRESSED");
+		motorA.spin(0);
+		motorB.spin(0);
+		motorC.spin(0);
 		toMiddle();
+		prev_button = PSB_RED;
 	}
 
 	// go to lower floor
     if(ps2x.ButtonPressed(PSB_R2)){
-		Serial.println("R2 Pressed");
+		//Serial.println("R2 Pressed");
+		motorA.spin(0);
+		motorB.spin(0);
+		motorC.spin(0);
 		toLow();
+		prev_button = PSB_R2;
     }
    
 	// go to upper floor
 	if(ps2x.ButtonPressed(PSB_L2)){
-		Serial.println("L2 PRESSED");
+		//Serial.println("L2 PRESSED");
+		motorA.spin(0);
+		motorB.spin(0);
+		motorC.spin(0);
 		toHigh();
+		prev_button = PSB_L2;
 	}
 	
 	// arm up
-	if(ps2x.Button(PSB_PAD_UP)){
+	if(ps2x.ButtonReleased(PSB_PAD_UP)){
+	  //Serial.println("UP released");
+	}
+	else if(ps2x.Button(PSB_PAD_UP)){
 		if(udpos >= 25){
+			if(!(prev_button == PSB_PAD_UP || prev_button == PSB_PAD_DOWN)){
+				arm_x = getArm_x(udpos, bfpos);	// refresh arm_x
+			}
 			udpos -= increment;
 			updown.write(udpos);
-			Serial.print("up-down: ");
-			Serial.println(udpos);
 			
-			if(inLow && udpos >= 45 && udpos <= 75 && bfpos >= 10 && bfpos <= 30){
-				bfpos = (int)(low_back_forward[udpos]+0.5);
+			bfpos = getBackForwardAngle(arm_x, udpos, bfpos);	// inverse kinematic
+			backforward.write(bfpos);
+			
+			prev_button = PSB_PAD_UP;
+			
+			/*Serial.print("up-down: ");
+			Serial.print(udpos);
+			Serial.print(", back-forward: ");
+			Serial.println(bfpos);*/
+			
+			/*if(inLow && udpos >= 45 && udpos <= 75 && bfpos >= 10 && bfpos <= 30){
+				bfpos = (int)(low_back_forward[udpos-45]+0.5);
 				backforward.write(bfpos);
 				Serial.print("back-forward: ");
 				Serial.println(bfpos);
 			}
 			else if(inHigh && udpos >= 25 && udpos <= 45){
-				bfpos = (int)(high_back_forward[udpos]+0.5);
+				bfpos = (int)(high_back_forward[udpos-25]+0.5);
 				backforward.write(bfpos);
 				Serial.print("back-forward: ");
 				Serial.println(bfpos);
-			}
+			}*/
 			delay(10);
 		}
 		else{
-			Serial.println("up-down position reaches lower limit");
+			//Serial.println("up-down position reaches lower limit");
 		}
 	}
 
 	// arm down
-	if(ps2x.Button(PSB_PAD_DOWN)){
+	if(ps2x.ButtonReleased(PSB_PAD_DOWN)){}
+	else if(ps2x.Button(PSB_PAD_DOWN)){
 		if(udpos <= 150){
+			if(!(prev_button == PSB_PAD_UP || prev_button == PSB_PAD_DOWN)){
+				arm_x = getArm_x(udpos, bfpos);	// refresh arm_x
+			}
 			udpos += increment;
 			updown.write(udpos);
-			Serial.print("up-down: ");
-			Serial.println(udpos);
 			
-			if(inLow && udpos >= 45 && udpos <= 75 && bfpos >= 10 && bfpos <= 30){
-				bfpos = (int)(low_back_forward[udpos]+0.5);
+			bfpos = getBackForwardAngle(arm_x, udpos, bfpos);	// inverse kinematic
+			backforward.write(bfpos);
+			
+			/*Serial.print("up-down: ");
+			Serial.print(udpos);
+			Serial.print(", back-forward: ");
+			Serial.println(bfpos);*/
+			
+			prev_button = PSB_PAD_DOWN;
+			
+			/*if(inLow && udpos >= 45 && udpos <= 75 && bfpos >= 10 && bfpos <= 30){
+				bfpos = (int)(low_back_forward[udpos-45]+0.5);
 				backforward.write(bfpos);
 				Serial.print("back-forward: ");
 				Serial.println(bfpos);
 			}
 			else if(inHigh && udpos >= 25 && udpos <= 45){
-				bfpos = (int)(high_back_forward[udpos]+0.5);
+				bfpos = (int)(high_back_forward[udpos-25]+0.5);
 				backforward.write(bfpos);
 				Serial.print("back-forward: ");
 				Serial.println(bfpos);
-			}
+			}*/
 			delay(10);
 		}
 		else{
-			Serial.println("up-down position reaches upper limit");
+			//Serial.println("up-down position reaches upper limit");
 		}
 	}
     
 	// arm forward
-	if(ps2x.Button(PSB_PAD_LEFT)){
+	if(ps2x.ButtonReleased(PSB_PAD_LEFT)){}
+	else if(ps2x.Button(PSB_PAD_LEFT)){
 		if(bfpos <= 110){
 			bfpos += increment;
 			backforward.write(bfpos);
 			Serial.print("back-forward: ");
 			Serial.println(bfpos);
 			
-			if(inLow && bfpos >= 10 && bfpos <= 30 && udpos >= 45 && udpos <= 75){
-				udpos = (int)(low_up_down[bfpos]+0.5);
+			prev_button = PSB_PAD_LEFT;
+			
+			/*if(inLow && bfpos >= 10 && bfpos <= 30 && udpos >= 45 && udpos <= 75){
+				udpos = (int)(low_up_down[bfpos-10]+0.5);
 				updown.write(udpos);
 				Serial.print("up-down: ");
 				Serial.println(udpos);
 			}
-			else if(inHigh){}
+			//else if(inHigh){}*/
 			delay(10);
 		}
 		else{
-			Serial.println("back-forward position reaches upper limit");
+			//Serial.println("back-forward position reaches upper limit");
 		}
 	}
 
 	// arm back
-	if(ps2x.Button(PSB_PAD_RIGHT)){ 
+	if(ps2x.ButtonReleased(PSB_PAD_RIGHT)){}
+	else if(ps2x.Button(PSB_PAD_RIGHT)){ 
 		if(bfpos >= 10){
 			bfpos -= increment;
 			backforward.write(bfpos);
 			Serial.print("back-forward: ");
 			Serial.println(bfpos);
 			
-			if(inLow && bfpos >= 10 && bfpos <= 30 && udpos >= 45 && udpos <= 75){
-				udpos = (int)(low_up_down[bfpos]+0.5);
+			prev_button = PSB_PAD_RIGHT;
+			
+			/*if(inLow && bfpos >= 10 && bfpos <= 30 && udpos >= 45 && udpos <= 75){
+				udpos = (int)(low_up_down[bfpos-10]+0.5);
 				updown.write(udpos);
 				Serial.print("updown: ");
 				Serial.println(udpos);
 			}
-			else if(inHigh){}
+			//else if(inHigh){}*/
 			delay(10);
 		}
 		else{
-			Serial.println("back-forward position reaches lower limit");
+			//Serial.println("back-forward position reaches lower limit");
 		}
 	}
 }
 
-void conveyorControl(){
+/*void conveyorControl(){
+	/*static int inSize;
+	static char c;
+	static byte conveyor_mode = STOP;
+	
+	if((inSize = BT.available()) > 0){
+		c = (char)BT.read();
+	}
+	
+	if(c == 'A')
+		conveyor_mode = UP;
+	else if(c == 'B')
+		conveyor_mode = DOWN;
+	else if(c == 'q')
+		conveyor_mode = STOP;
+	
+	if(conveyor_mode == UP){
+		Serial.println("Conveyor going up");
+		conveyor.spin(255, CW);
+	}
+	else if(conveyor_mode == DOWN){
+		Serial.println("Conveyor going down");
+		conveyor.spin(255, CCW);
+	}
+	else{
+		conveyor.spin(0);
+	}
+	
 	// downward
     if(ps2x.Button(PSB_L1)){
-      Serial.println("L1 pressed: Conveyor goes downward");
-      conveyor.spin(200, CW);
+		//Serial.println("L1 pressed: Conveyor goes downward");
+		conveyor.spin(255, CW);
     }
     // upward
     else if(ps2x.Button(PSB_R1)){
-      Serial.println("R1 pressed: Conveyor goes upward");
-      conveyor.spin(200, CCW);
+		//Serial.println("R1 pressed: Conveyor goes upward");
+		conveyor.spin(255, CCW);
     }
 	else{
 		conveyor.spin(0);
 	}
-}
+}*/
 
 /*void electromagnetControl(){
 	if(ps2x.ButtonPressed(PSB_L2)){
@@ -367,11 +483,11 @@ void conveyorControl(){
 }*/
 
 void toMiddle(){
-	inHigh = false;
-	inLow = false;
+	//inHigh = false;
+	//inLow = false;
 	increment = 2;
 	
-	Serial.println("to Middle");
+	//Serial.println("to Middle");
 	int _increment = 0;
 	
 	_increment = bfMiddle - bfpos > 0 ? 1 : -1;
@@ -389,15 +505,15 @@ void toMiddle(){
 		delay(10);
 	}
 	udpos = udMiddle;                                                                                                                                                                                                                                                                                                  
-	Serial.println("OK");
+	//Serial.println("OK");
 }
 
 void toHigh(){
-	inHigh = true;
-	inLow = false;
+	//inHigh = true;
+	//inLow = false;
 	increment = 1;
 	
-	Serial.println("to High");
+	//Serial.println("to High");
 	int _increment = 0;
 
 	_increment = (udHigh - udpos > 0) ? 1 : -1;
@@ -415,15 +531,15 @@ void toHigh(){
 		delay(10);  
 	}
 	bfpos = bfHigh;
-	Serial.println("OK");
+	//Serial.println("OK");
 }
 
 void toLow(){
-	inLow = true;
-	inHigh = false;
+	//inLow = true;
+	//inHigh = false;
 	increment = 1;
 	
-	Serial.println("to Low");
+	//Serial.println("to Low");
 	int _increment = 0;
 
 	_increment = (udLow - udpos > 0) ? 1 : -1;
@@ -442,7 +558,7 @@ void toLow(){
 		delay(10);
 	}
 	bfpos = bfLow;
-	Serial.println("OK");
+	//Serial.println("OK");
 }
 
 /*void setAngle(int udpos_new, int bfpos_new){
@@ -485,7 +601,7 @@ void carMovement(){
 	if(x == prev_x && y == prev_y && x == prev_prev_x && y == prev_prev_y){
 		// left-forward
 		if(x < 70 && y < 70){
-			Serial.println("Left-Forward");
+			//Serial.println("Left-Forward");
 			motorA.spin(fullspeed, CW);
 			motorB.spin(fullspeed, CCW);
 			motorC.spin(0);
@@ -493,7 +609,7 @@ void carMovement(){
 		
 		// right-forward
 		else if(x > 184 && y < 70){
-			Serial.println("Right-Forward");
+			//Serial.println("Right-Forward");
 			motorA.spin(0);
 			motorB.spin(fullspeed, CCW);
 			motorC.spin(fullspeed, CW);
@@ -501,7 +617,7 @@ void carMovement(){
 		
 		// right-backward
 		else if(x > 184 && y > 184){
-			Serial.println("Right-Backward");
+			//Serial.println("Right-Backward");
 			motorA.spin(fullspeed, CCW);
 			motorB.spin(fullspeed, CW);
 			motorC.spin(0);
@@ -509,7 +625,7 @@ void carMovement(){
 		
 		// left-backward
 		else if(x < 70 && y > 184){
-			Serial.println("Left-Backward");
+			//Serial.println("Left-Backward");
 			motorA.spin(0);
 			motorB.spin(fullspeed, CW);
 			motorC.spin(fullspeed, CCW);
@@ -517,7 +633,7 @@ void carMovement(){
 		
 		// forward
 		else if(x > 70 && x < 184 && y < 70){
-			Serial.println("Forward");
+			//Serial.println("Forward");
 			motorA.spin(halfspeed, CW);
 			motorB.spin(fullspeed, CCW);
 			motorC.spin(halfspeed, CW);
@@ -525,7 +641,7 @@ void carMovement(){
 		
 		// right
 		else if(x > 184 && y > 70 && y < 184){
-			Serial.println("Right");
+			//Serial.println("Right");
 			motorA.spin(fullspeed, CCW);
 			motorB.spin(0);
 			motorC.spin(fullspeed, CW);
@@ -533,7 +649,7 @@ void carMovement(){
 		
 		// backward
 		else if(x > 70 && x < 184 && y > 184){
-			Serial.println("Backward");
+			//Serial.println("Backward");
 			motorA.spin(halfspeed, CCW);
 			motorB.spin(fullspeed, CW);
 			motorC.spin(halfspeed, CCW);
@@ -541,7 +657,7 @@ void carMovement(){
 		
 		// left
 		else if(x < 70 && y > 70 && y < 184){
-			Serial.println("Left");
+			//Serial.println("Left");
 			motorA.spin(fullspeed, CW);
 			motorB.spin(0);
 			motorC.spin(fullspeed, CCW);
@@ -565,22 +681,34 @@ void carMovement(){
 void rotate(){
 	x = ps2x.Analog(PSS_RX);
 	y = ps2x.Analog(PSS_RY);
+	byte LX = ps2x.Analog(PSS_LX);
+	byte LY = ps2x.Analog(PSS_LY);
 	
 	// prevent impulse
 	if(x == 255 && y == 255) return;
 	
 	if(mode == FAST){
+    /*Serial.print("x: ");
+    Serial.print(x);
+    Serial.print(", y: ");
+    Serial.println(y);*/
+    
 		if(x < 70){
-			Serial.println("Wheel rotate CW; Car rotate CCW");
+			//Serial.println("Wheel rotate CW; Car rotate CCW");
 			motorA.spin(70, CW);
 			motorB.spin(70, CW);
 			motorC.spin(70, CW);
 		}
 		else if(x > 184){
-			Serial.println("Wheel rotate CCW; Car rotate CW");
+			//Serial.println("Wheel rotate CCW; Car rotate CW");
 			motorA.spin(70, CCW);
 			motorB.spin(70, CCW);
 			motorC.spin(70, CCW);
+		}
+		else if(LX > 70 && LX < 184 && LY > 70 && LY < 184){
+			motorA.spin(0);
+			motorB.spin(0);
+			motorC.spin(0);
 		}
 	}
 	else if(mode == SLOW){
@@ -595,6 +723,11 @@ void rotate(){
 			motorA.spin(35, CCW);
 			motorB.spin(35, CCW);
 			motorC.spin(35, CCW);
+		}
+		else if(LX > 70 && LX < 184 && LY > 70 && LY < 184){
+			motorA.spin(0);
+			motorB.spin(0);
+			motorC.spin(0);
 		}
 	}
 }
